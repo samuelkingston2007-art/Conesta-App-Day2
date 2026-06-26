@@ -3,7 +3,7 @@
 AI Gift Finder is a premium, dark-themed web application designed to help users find thoughtful, highly tailored gifts for any occasion. It leverages **Llama-3.3** via the **Groq API** to process recipient profiles, interests, budgets, and tones—returning structured, matching gift options that can be instantly saved to a personal checklist dashboard.
 
 ## 🚀 Live Demo
-**Link**: [https://conesta-app-day2-samuelkingston.vercel.app](https://conesta-app-day2-samuelkingston.vercel.app) *(Deploy your own link by following the Vercel steps below)*
+**Link**: [https://conesta-app-day2.vercel.app](https://conesta-app-day2.vercel.app)
 
 ---
 
