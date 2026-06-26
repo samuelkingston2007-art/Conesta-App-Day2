@@ -2,7 +2,7 @@ import Groq from "groq-sdk";
 import { NextResponse } from "next/server";
 
 const groq = new Groq({
-  apiKey: process.env.GROQ_API_KEY,
+  apiKey: process.env.GROQ_API_KEY || "dummy_key",
 });
 
 // A list of simple inappropriate/offensive words for content filtering
