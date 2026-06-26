@@ -18,6 +18,15 @@ interface UserInfo {
   email: string;
 }
 
+interface AIRecommendation {
+  name: string;
+  reason: string;
+  estimatedPrice: number;
+  whereToBuy: string;
+  matchPercentage: number;
+  giftType: string;
+}
+
 export default function GiftsPage() {
   const router = useRouter();
   
@@ -25,11 +34,18 @@ export default function GiftsPage() {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
 
-  // AI state
-  const [prompt, setPrompt] = useState("");
-  const [aiAnswer, setAiAnswer] = useState("");
+  // AI Questionnaire state
+  const [aiRecipient, setAiRecipient] = useState("");
+  const [aiOccasion, setAiOccasion] = useState("Birthday");
+  const [aiBudget, setAiBudget] = useState("");
+  const [aiInterests, setAiInterests] = useState("");
+  const [aiTone, setAiTone] = useState("Practical");
+  
+  // AI Suggestions result state
+  const [aiSuggestions, setAiSuggestions] = useState<AIRecommendation[]>([]);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState("");
+  const [savedAiIndices, setSavedAiIndices] = useState<Record<number, boolean>>({});
 
   // CRUD state
   const [gifts, setGifts] = useState<GiftItem[]>([]);
@@ -101,69 +117,67 @@ export default function GiftsPage() {
     }
   }
 
-  // Ask AI suggestion
+  // Ask AI suggestion with structured format
   async function handleAskAI() {
-    if (!prompt.trim()) return;
+    if (!aiRecipient.trim() || !aiOccasion.trim()) return;
     setAiLoading(true);
     setAiError("");
-    setAiAnswer("");
+    setAiSuggestions([]);
+    setSavedAiIndices({});
 
     try {
       const res = await fetch("/api/ai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt }),
+        body: JSON.stringify({
+          recipient: aiRecipient,
+          occasion: aiOccasion,
+          budget: aiBudget ? Number(aiBudget) : undefined,
+          interests: aiInterests,
+          tone: aiTone,
+        }),
       });
 
       const data = await res.json();
-      if (res.ok) {
-        setAiAnswer(data.response || "No response received from AI.");
+      if (res.ok && data.recommendations) {
+        setAiSuggestions(data.recommendations);
       } else {
-        setAiError(data.error || "Failed to generate recommendation. Try again.");
+        setAiError(data.error || "Failed to generate recommendations. Please try again.");
       }
     } catch (err) {
-      setAiError("Network error. Could not contact AI services.");
+      setAiError("Network error. Could not contact AI gift concierge.");
       console.error(err);
     } finally {
       setAiLoading(false);
     }
   }
 
-  // Quick save from AI answer
-  async function handleSaveAISuggestion() {
-    if (!aiAnswer) return;
-    
-    // Attempt to extract a gift name from the recommendation summary or prompt
-    let suggestedName = "AI Recommended Gift";
-    let suggestedOccasion = "General";
+  // Instant save suggested card to database
+  async function handleSaveAISuggestion(rec: AIRecommendation, index: number) {
+    if (savedAiIndices[index]) return; // Already saved
 
-    // Simple heuristic parser for name
-    const lines = aiAnswer.split("\n");
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (trimmed.startsWith("- **") || trimmed.startsWith("1. **") || trimmed.startsWith("**")) {
-        const match = trimmed.match(/\*\*(.*?)\*\*/);
-        if (match && match[1]) {
-          suggestedName = match[1];
-          break;
-        }
+    try {
+      const res = await fetch("/api/gifts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: rec.name,
+          occasion: aiOccasion,
+          budget: rec.estimatedPrice,
+          notes: `${rec.reason} Recommended by AI. Buy via: ${rec.whereToBuy} (${rec.giftType} Type).`,
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        setGifts([data.gift, ...gifts]);
+        setSavedAiIndices((prev) => ({ ...prev, [index]: true }));
+      } else {
+        alert(data.error || "Failed to save recommended gift.");
       }
+    } catch (err) {
+      console.error("Failed to save recommended gift:", err);
     }
-
-    // Heuristic parser for occasion from user prompt
-    const lowercasePrompt = prompt.toLowerCase();
-    if (lowercasePrompt.includes("birthday")) suggestedOccasion = "Birthday";
-    else if (lowercasePrompt.includes("christmas")) suggestedOccasion = "Christmas";
-    else if (lowercasePrompt.includes("anniversary")) suggestedOccasion = "Anniversary";
-    else if (lowercasePrompt.includes("wedding")) suggestedOccasion = "Wedding";
-    else if (lowercasePrompt.includes("graduation")) suggestedOccasion = "Graduation";
-
-    setManualName(suggestedName);
-    setManualOccasion(suggestedOccasion);
-    setManualNotes(aiAnswer.substring(0, 300) + (aiAnswer.length > 300 ? "..." : ""));
-    
-    // Focus the manual add card or prefill it
-    window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
   // Add a gift manually
@@ -315,7 +329,7 @@ export default function GiftsPage() {
           </Link>
           
           <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
-            <span style={{ color: "var(--text-secondary)", fontSize: "0.9rem" }} className="hidden sm:inline">
+            <span style={{ color: "var(--text-secondary)", fontSize: "0.9rem" }}>
               Signed in as: <strong style={{ color: "#fff" }}>{user?.email}</strong>
             </span>
             <button onClick={handleLogout} className="btn btn-secondary" style={{ padding: "0.45rem 1rem", fontSize: "0.85rem" }}>
@@ -341,6 +355,7 @@ export default function GiftsPage() {
           </div>
         )}
 
+        {/* Dashboard Panels */}
         <div style={{
           display: "grid",
           gridTemplateColumns: "repeat(auto-fit, minmax(320px, 1fr))",
@@ -348,32 +363,111 @@ export default function GiftsPage() {
           alignItems: "start"
         }}>
           
-          {/* LEFT PANEL: Generator & Manual creation form */}
+          {/* LEFT PANEL: Structured AI Questionnaire Form */}
           <div style={{ display: "flex", flexDirection: "column", gap: "2rem" }}>
             
             {/* AI Generator Box */}
             <div className="glass-card animate-slide-up" style={{ padding: "1.75rem" }}>
-              <h2 style={{ fontSize: "1.35rem", marginBottom: "1rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <span>🤖</span> AI Gift Assistant
+              <h2 style={{ fontSize: "1.35rem", marginBottom: "1.25rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                <span>🤖</span> AI Gift Generator
               </h2>
               
-              <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-                <textarea
-                  placeholder="Describe who you are buying for, their interests, and any budget limits. E.g., 'Gift for my mom who loves gardening and cooking under ₹3000'"
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  className="input-field"
-                  style={{ height: "110px", resize: "none" }}
-                  disabled={aiLoading}
-                />
+              <div style={{ display: "flex", flexDirection: "column", gap: "1.1rem" }}>
+                
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                  <label style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: 600 }}>Recipient Profile *</label>
+                  <input
+                    type="text"
+                    placeholder="E.g. My programmer husband, tech-savvy sister"
+                    value={aiRecipient}
+                    onChange={(e) => setAiRecipient(e.target.value)}
+                    className="input-field"
+                    required
+                    disabled={aiLoading}
+                  />
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                    <label style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: 600 }}>Occasion *</label>
+                    <select
+                      value={aiOccasion}
+                      onChange={(e) => setAiOccasion(e.target.value)}
+                      className="input-field"
+                      style={{ background: "#161622" }}
+                      disabled={aiLoading}
+                    >
+                      <option value="Birthday">Birthday</option>
+                      <option value="Christmas">Christmas / Holidays</option>
+                      <option value="Anniversary">Anniversary</option>
+                      <option value="Wedding">Wedding</option>
+                      <option value="Graduation">Graduation</option>
+                      <option value="Valentine's Day">Valentine's Day</option>
+                      <option value="Housewarming">Housewarming</option>
+                      <option value="Other">Other / General</option>
+                    </select>
+                  </div>
+
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                    <label style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: 600 }}>Max Budget</label>
+                    <input
+                      type="number"
+                      placeholder="E.g. 5000"
+                      value={aiBudget}
+                      onChange={(e) => setAiBudget(e.target.value)}
+                      className="input-field"
+                      disabled={aiLoading}
+                    />
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                  <label style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: 600 }}>Interests / Hobbies</label>
+                  <input
+                    type="text"
+                    placeholder="E.g. Gaming, keyboards, cooking, hiking"
+                    value={aiInterests}
+                    onChange={(e) => setAiInterests(e.target.value)}
+                    className="input-field"
+                    disabled={aiLoading}
+                  />
+                </div>
+
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                  <label style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: 600 }}>Gift Tone</label>
+                  <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                    {["Practical", "Sentimental", "Funny/Gag", "Luxury", "Unique"].map((tone) => (
+                      <button
+                        key={tone}
+                        type="button"
+                        onClick={() => setAiTone(tone)}
+                        style={{
+                          padding: "0.35rem 0.85rem",
+                          borderRadius: "20px",
+                          border: "1px solid",
+                          borderColor: aiTone === tone ? "var(--accent-primary)" : "var(--border-color)",
+                          background: aiTone === tone ? "rgba(124, 58, 237, 0.15)" : "transparent",
+                          color: aiTone === tone ? "#c084fc" : "var(--text-secondary)",
+                          fontSize: "0.8rem",
+                          fontWeight: 600,
+                          cursor: "pointer",
+                          transition: "all 0.2s"
+                        }}
+                        disabled={aiLoading}
+                      >
+                        {tone}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 
                 <button
                   onClick={handleAskAI}
                   className="btn btn-primary"
-                  style={{ width: "100%" }}
-                  disabled={aiLoading || !prompt.trim()}
+                  style={{ width: "100%", marginTop: "0.5rem" }}
+                  disabled={aiLoading || !aiRecipient.trim()}
                 >
-                  {aiLoading ? "Consulting AI..." : "Generate Recommendations"}
+                  {aiLoading ? "Consulting AI Advisor..." : "Generate AI Suggestions"}
                 </button>
               </div>
 
@@ -382,42 +476,12 @@ export default function GiftsPage() {
                   {aiError}
                 </div>
               )}
-
-              {aiAnswer && (
-                <div style={{
-                  marginTop: "1.5rem",
-                  background: "rgba(0, 0, 0, 0.25)",
-                  borderRadius: "10px",
-                  padding: "1.25rem",
-                  border: "1px solid var(--border-color)",
-                  position: "relative"
-                }} className="animate-fade-in">
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
-                    <span style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: 600 }}>AI Suggestion Output:</span>
-                    <button
-                      onClick={handleSaveAISuggestion}
-                      className="btn btn-secondary"
-                      style={{ padding: "0.25rem 0.6rem", fontSize: "0.75rem" }}
-                    >
-                      ✨ Prefill Form Below
-                    </button>
-                  </div>
-                  <p style={{
-                    fontSize: "0.9rem",
-                    color: "var(--text-primary)",
-                    lineHeight: "1.5",
-                    whiteSpace: "pre-wrap"
-                  }}>
-                    {aiAnswer}
-                  </p>
-                </div>
-              )}
             </div>
 
             {/* Manual Form Box */}
             <div className="glass-card animate-slide-up" style={{ padding: "1.75rem" }}>
               <h2 style={{ fontSize: "1.35rem", marginBottom: "1rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
-                <span>✍️</span> Add Gift Item
+                <span>✍️</span> Add Gift Manually
               </h2>
               
               <form onSubmit={handleAddGift} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
@@ -425,7 +489,7 @@ export default function GiftsPage() {
                   <label style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: 600 }}>Gift Name *</label>
                   <input
                     type="text"
-                    placeholder="E.g. Gardening Spade Set"
+                    placeholder="E.g. Custom Novel Keycaps"
                     value={manualName}
                     onChange={(e) => setManualName(e.target.value)}
                     className="input-field"
@@ -439,7 +503,7 @@ export default function GiftsPage() {
                     <label style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: 600 }}>Occasion *</label>
                     <input
                       type="text"
-                      placeholder="E.g. Birthday, Xmas"
+                      placeholder="E.g. Birthday"
                       value={manualOccasion}
                       onChange={(e) => setManualOccasion(e.target.value)}
                       className="input-field"
@@ -448,10 +512,10 @@ export default function GiftsPage() {
                     />
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                    <label style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: 600 }}>Budget (Cost)</label>
+                    <label style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: 600 }}>Cost / Price</label>
                     <input
                       type="number"
-                      placeholder="E.g. 2500"
+                      placeholder="E.g. 1200"
                       value={manualBudget}
                       onChange={(e) => setManualBudget(e.target.value)}
                       className="input-field"
@@ -461,13 +525,13 @@ export default function GiftsPage() {
                 </div>
 
                 <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                  <label style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: 600 }}>Notes / URL / Description</label>
+                  <label style={{ fontSize: "0.85rem", color: "var(--text-secondary)", fontWeight: 600 }}>Notes / Brand / URL</label>
                   <textarea
-                    placeholder="Details about brand, size, or purchasing link..."
+                    placeholder="Purchasing link, size options, etc..."
                     value={manualNotes}
                     onChange={(e) => setManualNotes(e.target.value)}
                     className="input-field"
-                    style={{ height: "70px", resize: "none" }}
+                    style={{ height: "60px", resize: "none" }}
                     disabled={addingGift}
                   />
                 </div>
@@ -485,245 +549,343 @@ export default function GiftsPage() {
 
           </div>
 
-          {/* RIGHT PANEL: Saved Gift Lists (Dashboard CRUD) */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+          {/* RIGHT PANEL: AI Generated suggestions deck AND Saved list */}
+          <div style={{ display: "flex", flexDirection: "column", gap: "2rem" }}>
             
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <h2 style={{ fontSize: "1.5rem" }}>My Saved Gift List</h2>
-              <span style={{
-                background: "rgba(255,255,255,0.06)",
-                padding: "0.25rem 0.75rem",
-                borderRadius: "12px",
-                fontSize: "0.85rem",
-                fontWeight: 600,
-                border: "1px solid var(--border-color)"
-              }}>
-                {gifts.length} {gifts.length === 1 ? "item" : "items"}
-              </span>
-            </div>
+            {/* AI Generated Deck */}
+            {aiSuggestions.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }} className="animate-fade-in">
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <h2 style={{ fontSize: "1.5rem", display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                    <span>✨</span> AI Advisor Choices
+                  </h2>
+                  <span style={{
+                    background: "rgba(124, 58, 237, 0.15)",
+                    border: "1px solid rgba(124, 58, 237, 0.2)",
+                    padding: "0.2rem 0.6rem",
+                    borderRadius: "8px",
+                    fontSize: "0.75rem",
+                    color: "#c084fc",
+                    fontWeight: 600
+                  }}>
+                    Groq Llama-3.3
+                  </span>
+                </div>
 
-            {loadingGifts ? (
-              <div style={{ padding: "4rem", textAlign: "center", color: "var(--text-secondary)" }}>
-                Loading gift list items...
-              </div>
-            ) : gifts.length === 0 ? (
-              <div className="glass-card" style={{ padding: "4rem 2rem", textAlign: "center", color: "var(--text-secondary)" }}>
-                <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>📋</div>
-                <h3>Your gift list is empty</h3>
-                <p style={{ fontSize: "0.9rem", color: "var(--text-muted)", marginTop: "0.5rem" }}>
-                  Use the AI Assistant to generate ideas, or add some custom items manually using the form.
-                </p>
-              </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
-                {gifts.map((gift) => (
-                  <div
-                    key={gift._id}
-                    className="glass-card animate-fade-in"
-                    style={{
-                      padding: "1.5rem",
-                      borderLeft: gift.isPurchased
-                        ? "4px solid var(--success-color)"
-                        : "4px solid var(--accent-primary)",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: "1rem"
-                    }}
-                  >
-                    
-                    {/* EDIT MODE CARD */}
-                    {editingId === gift._id ? (
-                      <form onSubmit={handleSaveEdit} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-                        <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                          <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: 600 }}>Edit Name</label>
-                          <input
-                            type="text"
-                            value={editName}
-                            onChange={(e) => setEditName(e.target.value)}
-                            className="input-field"
-                            required
-                          />
+                <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+                  {aiSuggestions.map((rec, index) => (
+                    <div
+                      key={index}
+                      className="glass-card"
+                      style={{
+                        padding: "1.25rem",
+                        background: "rgba(124, 58, 237, 0.03)",
+                        border: "1px solid rgba(124, 58, 237, 0.15)"
+                      }}
+                    >
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem" }}>
+                        <div>
+                          <span style={{
+                            background: "linear-gradient(135deg, #10b981 0%, #059669 100%)",
+                            color: "#fff",
+                            fontSize: "0.75rem",
+                            padding: "0.15rem 0.45rem",
+                            borderRadius: "6px",
+                            fontWeight: 700,
+                            marginRight: "0.5rem"
+                          }}>
+                            {rec.matchPercentage}% Match
+                          </span>
+                          <span style={{
+                            background: "rgba(255,255,255,0.06)",
+                            color: "var(--text-secondary)",
+                            fontSize: "0.72rem",
+                            padding: "0.15rem 0.45rem",
+                            borderRadius: "6px",
+                            fontWeight: 600
+                          }}>
+                            {rec.giftType}
+                          </span>
+                          
+                          <h3 style={{ fontSize: "1.15rem", marginTop: "0.5rem", color: "#fff" }}>
+                            {rec.name}
+                          </h3>
                         </div>
 
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                        <button
+                          onClick={() => handleSaveAISuggestion(rec, index)}
+                          className={savedAiIndices[index] ? "btn btn-secondary" : "btn btn-primary"}
+                          style={{
+                            padding: "0.4rem 0.85rem",
+                            fontSize: "0.8rem",
+                            cursor: savedAiIndices[index] ? "default" : "pointer"
+                          }}
+                          disabled={savedAiIndices[index]}
+                        >
+                          {savedAiIndices[index] ? "✓ Saved" : "➕ Save to List"}
+                        </button>
+                      </div>
+
+                      <p style={{ fontSize: "0.88rem", color: "var(--text-secondary)", marginTop: "0.75rem", lineHeight: "1.4" }}>
+                        {rec.reason}
+                      </p>
+
+                      <div style={{ display: "flex", gap: "1rem", marginTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.04)", paddingTop: "0.75rem" }}>
+                        <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                          💰 Est: <strong style={{ color: "#fff" }}>{rec.estimatedPrice > 0 ? rec.estimatedPrice.toLocaleString() : "N/A"}</strong>
+                        </span>
+                        <span style={{ fontSize: "0.8rem", color: "var(--text-muted)" }}>
+                          🛍️ Buy: <strong style={{ color: "#fff" }}>{rec.whereToBuy}</strong>
+                        </span>
+                      </div>
+
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Saved Gift Planner List */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+              
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <h2 style={{ fontSize: "1.5rem" }}>My Saved Gift List</h2>
+                <span style={{
+                  background: "rgba(255,255,255,0.06)",
+                  padding: "0.25rem 0.75rem",
+                  borderRadius: "12px",
+                  fontSize: "0.85rem",
+                  fontWeight: 600,
+                  border: "1px solid var(--border-color)"
+                }}>
+                  {gifts.length} {gifts.length === 1 ? "item" : "items"}
+                </span>
+              </div>
+
+              {loadingGifts ? (
+                <div style={{ padding: "4rem", textAlign: "center", color: "var(--text-secondary)" }}>
+                  Loading gift list items...
+                </div>
+              ) : gifts.length === 0 ? (
+                <div className="glass-card" style={{ padding: "4rem 2rem", textAlign: "center", color: "var(--text-secondary)" }}>
+                  <div style={{ fontSize: "3rem", marginBottom: "1rem" }}>📋</div>
+                  <h3>Your planner is empty</h3>
+                  <p style={{ fontSize: "0.9rem", color: "var(--text-muted)", marginTop: "0.5rem" }}>
+                    Configure the AI Generator to get suggestions, or input some custom gift items manually.
+                  </p>
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem" }}>
+                  {gifts.map((gift) => (
+                    <div
+                      key={gift._id}
+                      className="glass-card animate-fade-in"
+                      style={{
+                        padding: "1.5rem",
+                        borderLeft: gift.isPurchased
+                          ? "4px solid var(--success-color)"
+                          : "4px solid var(--accent-primary)",
+                        display: "flex",
+                        flexDirection: "column",
+                        gap: "1rem"
+                      }}
+                    >
+                      
+                      {/* EDIT MODE CARD */}
+                      {editingId === gift._id ? (
+                        <form onSubmit={handleSaveEdit} style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
                           <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                            <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: 600 }}>Edit Occasion</label>
+                            <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: 600 }}>Edit Name</label>
                             <input
                               type="text"
-                              value={editOccasion}
-                              onChange={(e) => setEditOccasion(e.target.value)}
+                              value={editName}
+                              onChange={(e) => setEditName(e.target.value)}
                               className="input-field"
                               required
                             />
                           </div>
+
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1rem" }}>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                              <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: 600 }}>Edit Occasion</label>
+                              <input
+                                type="text"
+                                value={editOccasion}
+                                onChange={(e) => setEditOccasion(e.target.value)}
+                                className="input-field"
+                                required
+                              />
+                            </div>
+                            <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                              <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: 600 }}>Edit Cost</label>
+                              <input
+                                type="number"
+                                value={editBudget}
+                                onChange={(e) => setEditBudget(e.target.value)}
+                                className="input-field"
+                              />
+                            </div>
+                          </div>
+
                           <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                            <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: 600 }}>Edit Budget</label>
-                            <input
-                              type="number"
-                              value={editBudget}
-                              onChange={(e) => setEditBudget(e.target.value)}
+                            <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: 600 }}>Edit Notes</label>
+                            <textarea
+                              value={editNotes}
+                              onChange={(e) => setEditNotes(e.target.value)}
                               className="input-field"
+                              style={{ height: "60px", resize: "none" }}
                             />
                           </div>
-                        </div>
 
-                        <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
-                          <label style={{ fontSize: "0.8rem", color: "var(--text-secondary)", fontWeight: 600 }}>Edit Notes</label>
-                          <textarea
-                            value={editNotes}
-                            onChange={(e) => setEditNotes(e.target.value)}
-                            className="input-field"
-                            style={{ height: "60px", resize: "none" }}
-                          />
-                        </div>
-
-                        <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end" }}>
-                          <button
-                            type="button"
-                            onClick={() => setEditingId(null)}
-                            className="btn btn-secondary"
-                            style={{ padding: "0.4rem 1rem", fontSize: "0.85rem" }}
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type="submit"
-                            className="btn btn-primary"
-                            style={{ padding: "0.4rem 1.25rem", fontSize: "0.85rem" }}
-                            disabled={savingEdit}
-                          >
-                            {savingEdit ? "Saving..." : "Save Changes"}
-                          </button>
-                        </div>
-                      </form>
-                    ) : (
-                      /* READ-ONLY CARD VIEW */
-                      <>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem" }}>
-                          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
-                            <input
-                              type="checkbox"
-                              checked={gift.isPurchased}
-                              onChange={() => handleTogglePurchased(gift._id, gift.isPurchased)}
-                              style={{
-                                width: "20px",
-                                height: "20px",
-                                cursor: "pointer",
-                                accentColor: "var(--success-color)",
-                                borderRadius: "4px"
-                              }}
-                            />
-                            <div>
-                              <h3 style={{
-                                fontSize: "1.15rem",
-                                color: gift.isPurchased ? "var(--text-muted)" : "#fff",
-                                textDecoration: gift.isPurchased ? "line-through" : "none",
-                                wordBreak: "break-word"
-                              }}>
-                                {gift.name}
-                              </h3>
-                              <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.3rem", flexWrap: "wrap" }}>
-                                <span style={{
-                                  background: "rgba(124, 58, 237, 0.12)",
-                                  color: "#c084fc",
-                                  padding: "0.15rem 0.5rem",
-                                  borderRadius: "6px",
-                                  fontSize: "0.75rem",
-                                  fontWeight: 600,
-                                  border: "1px solid rgba(124, 58, 237, 0.2)"
+                          <div style={{ display: "flex", gap: "0.75rem", justifyContent: "flex-end" }}>
+                            <button
+                              type="button"
+                              onClick={() => setEditingId(null)}
+                              className="btn btn-secondary"
+                              style={{ padding: "0.4rem 1rem", fontSize: "0.85rem" }}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="submit"
+                              className="btn btn-primary"
+                              style={{ padding: "0.4rem 1.25rem", fontSize: "0.85rem" }}
+                              disabled={savingEdit}
+                            >
+                              {savingEdit ? "Saving..." : "Save Changes"}
+                            </button>
+                          </div>
+                        </form>
+                      ) : (
+                        /* READ-ONLY CARD VIEW */
+                        <>
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "1rem" }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                              <input
+                                type="checkbox"
+                                checked={gift.isPurchased}
+                                onChange={() => handleTogglePurchased(gift._id, gift.isPurchased)}
+                                style={{
+                                  width: "20px",
+                                  height: "20px",
+                                  cursor: "pointer",
+                                  accentColor: "var(--success-color)",
+                                  borderRadius: "4px"
+                                }}
+                              />
+                              <div>
+                                <h3 style={{
+                                  fontSize: "1.15rem",
+                                  color: gift.isPurchased ? "var(--text-muted)" : "#fff",
+                                  textDecoration: gift.isPurchased ? "line-through" : "none",
+                                  wordBreak: "break-word"
                                 }}>
-                                  🏷️ {gift.occasion}
-                                </span>
-                                
-                                {gift.budget > 0 && (
+                                  {gift.name}
+                                </h3>
+                                <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.3rem", flexWrap: "wrap" }}>
                                   <span style={{
-                                    background: "rgba(37, 99, 235, 0.12)",
-                                    color: "#60a5fa",
+                                    background: "rgba(124, 58, 237, 0.12)",
+                                    color: "#c084fc",
                                     padding: "0.15rem 0.5rem",
                                     borderRadius: "6px",
                                     fontSize: "0.75rem",
                                     fontWeight: 600,
-                                    border: "1px solid rgba(37, 99, 235, 0.2)"
+                                    border: "1px solid rgba(124, 58, 237, 0.2)"
                                   }}>
-                                    💰 Budget: {gift.budget.toLocaleString()}
+                                    🏷️ {gift.occasion}
                                   </span>
-                                )}
-                                
-                                <span style={{
-                                  background: gift.isPurchased ? "rgba(16, 185, 129, 0.12)" : "rgba(245, 158, 11, 0.12)",
-                                  color: gift.isPurchased ? "#34d399" : "#fbbf24",
-                                  padding: "0.15rem 0.5rem",
-                                  borderRadius: "6px",
-                                  fontSize: "0.75rem",
-                                  fontWeight: 600,
-                                  border: gift.isPurchased ? "1px solid rgba(16, 185, 129, 0.2)" : "1px solid rgba(245, 158, 11, 0.2)"
-                                }}>
-                                  {gift.isPurchased ? "✓ Purchased" : "● Pending"}
-                                </span>
+                                  
+                                  {gift.budget > 0 && (
+                                    <span style={{
+                                      background: "rgba(37, 99, 235, 0.12)",
+                                      color: "#60a5fa",
+                                      padding: "0.15rem 0.5rem",
+                                      borderRadius: "6px",
+                                      fontSize: "0.75rem",
+                                      fontWeight: 600,
+                                      border: "1px solid rgba(37, 99, 235, 0.2)"
+                                    }}>
+                                      💰 Price: {gift.budget.toLocaleString()}
+                                    </span>
+                                  )}
+                                  
+                                  <span style={{
+                                    background: gift.isPurchased ? "rgba(16, 185, 129, 0.12)" : "rgba(245, 158, 11, 0.12)",
+                                    color: gift.isPurchased ? "#34d399" : "#fbbf24",
+                                    padding: "0.15rem 0.5rem",
+                                    borderRadius: "6px",
+                                    fontSize: "0.75rem",
+                                    fontWeight: 600,
+                                    border: gift.isPurchased ? "1px solid rgba(16, 185, 129, 0.2)" : "1px solid rgba(245, 158, 11, 0.2)"
+                                  }}>
+                                    {gift.isPurchased ? "✓ Purchased" : "● Pending"}
+                                  </span>
+                                </div>
                               </div>
+                            </div>
+
+                            <div style={{ display: "flex", gap: "0.5rem" }}>
+                              <button
+                                onClick={() => handleStartEdit(gift)}
+                                style={{
+                                  background: "rgba(255,255,255,0.04)",
+                                  border: "1px solid var(--border-color)",
+                                  borderRadius: "8px",
+                                  width: "32px",
+                                  height: "32px",
+                                  cursor: "pointer",
+                                  fontSize: "0.85rem",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center"
+                                }}
+                                title="Edit gift details"
+                              >
+                                ✏️
+                              </button>
+                              <button
+                                onClick={() => handleDeleteGift(gift._id)}
+                                style={{
+                                  background: "rgba(239, 68, 68, 0.08)",
+                                  border: "1px solid rgba(239, 68, 68, 0.15)",
+                                  borderRadius: "8px",
+                                  width: "32px",
+                                  height: "32px",
+                                  cursor: "pointer",
+                                  fontSize: "0.85rem",
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center"
+                                }}
+                                title="Delete gift"
+                              >
+                                🗑️
+                              </button>
                             </div>
                           </div>
 
-                          <div style={{ display: "flex", gap: "0.5rem" }}>
-                            <button
-                              onClick={() => handleStartEdit(gift)}
-                              style={{
-                                background: "rgba(255,255,255,0.04)",
-                                border: "1px solid var(--border-color)",
-                                borderRadius: "8px",
-                                width: "32px",
-                                height: "32px",
-                                cursor: "pointer",
-                                fontSize: "0.85rem",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center"
-                              }}
-                              title="Edit gift details"
-                            >
-                              ✏️
-                            </button>
-                            <button
-                              onClick={() => handleDeleteGift(gift._id)}
-                              style={{
-                                background: "rgba(239, 68, 68, 0.08)",
-                                border: "1px solid rgba(239, 68, 68, 0.15)",
-                                borderRadius: "8px",
-                                width: "32px",
-                                height: "32px",
-                                cursor: "pointer",
-                                fontSize: "0.85rem",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center"
-                              }}
-                              title="Delete gift"
-                            >
-                              🗑️
-                            </button>
-                          </div>
-                        </div>
+                          {gift.notes && (
+                            <div style={{
+                              padding: "0.75rem",
+                              background: "rgba(0,0,0,0.15)",
+                              borderRadius: "8px",
+                              fontSize: "0.85rem",
+                              color: "var(--text-secondary)",
+                              border: "1px solid rgba(255,255,255,0.03)",
+                              wordBreak: "break-word"
+                            }}>
+                              {gift.notes}
+                            </div>
+                          )}
+                        </>
+                      )}
 
-                        {gift.notes && (
-                          <div style={{
-                            padding: "0.75rem",
-                            background: "rgba(0,0,0,0.15)",
-                            borderRadius: "8px",
-                            fontSize: "0.85rem",
-                            color: "var(--text-secondary)",
-                            border: "1px solid rgba(255,255,255,0.03)",
-                            wordBreak: "break-word"
-                          }}>
-                            {gift.notes}
-                          </div>
-                        )}
-                      </>
-                    )}
+                    </div>
+                  ))}
+                </div>
+              )}
 
-                  </div>
-                ))}
-              </div>
-            )}
+            </div>
 
           </div>
 
@@ -733,7 +895,7 @@ export default function GiftsPage() {
 
       {/* Footer */}
       <footer style={{ borderTop: "1px solid var(--border-color)", padding: "1.5rem", textAlign: "center", color: "var(--text-muted)", fontSize: "0.85rem", marginTop: "4rem" }}>
-        © {new Date().getFullYear()} Conesta AI Gift Finder. Dashboard view.
+        © {new Date().getFullYear()} Conesta AI Gift Finder. Day 4 AI Planner Hub.
       </footer>
     </div>
   );
